@@ -26,7 +26,10 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import GoogleGenerativeAI
 from langchain_openai import ChatOpenAI  
-from langchain_community.embeddings import HuggingFaceEmbeddings
+try:
+    from langchain_huggingface import HuggingFaceEmbeddings
+except ImportError:
+    from langchain_community.embeddings import HuggingFaceEmbeddings
 
 
 
@@ -65,14 +68,16 @@ def excel_hash(data) -> str:
 # ---------- SIDEBAR ----------------------------------------------------------------------------------------------------------------------#
 #------------------------------------------------------------------------------------------------------------------------------------------#
 
+# Initialize api_key before sidebar to ensure it's always defined
+api_key = os.getenv("GOOGLE_API_KEY", "")
+
 with st.sidebar:
     st.title("Your Documents")
     uploaded = st.file_uploader("Upload an Excel file", type=["xlsx", "xls"])
     
     # API key part
-    api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        api_key = st.text_input("Google API Key (or set in .env file)", type="password")
+        api_key = st.text_input("Google API Key (or set in .env file)", type="password", value="")
         if not api_key:
             st.warning("Please enter your Google API Key (or add to .env).")
             st.stop()
@@ -103,8 +108,8 @@ with st.sidebar:
 
 # ---------- API KEY ----------------------------------------------------------------------------------------------------------------------#
 #------------------------------------------------------------------------------------------------------------------------------------------#
-os.environ["GOOGLE_API_KEY"] = api_key
-
+if api_key:
+    os.environ["GOOGLE_API_KEY"] = api_key
 
 # -------------------------------------- SESSION KEYS ----------------------------------------------------------------------------------------------------------------------#
 #------------------------------------------------------------------------------------------------------------------------------------------#
@@ -112,44 +117,64 @@ if "excel_id" not in st.session_state:
     st.session_state.excel_id = None
 if "chain" not in st.session_state: # Cache the complete chain so we do NOT rebuild it every run
     st.session_state.chain = None
-
+if "embeddings" not in st.session_state: # Cache embeddings to avoid reloading model
+    st.session_state.embeddings = None
 
 # ----------------------------------------------MAIN ----------------------------------------------------------------------------------------------------------------------#
 #------------------------------------------------------------------------------------------------------------------------------------------#
-if uploaded is None:
-    st.info("👆 Upload an Excel file to start")
-    st.stop()
+try:
+    if uploaded is None:
+        st.info("👆 Upload an Excel file to start")
+        st.stop()
 
-uid = excel_hash(uploaded)
+    uid = excel_hash(uploaded)
+    log.info("Starting main execution for file: %s", uid)
 
-# ----------------------------------------------LOADING ----------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------------------------------------------------------------------------------------------------------#
-# embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2",
-    encode_kwargs={'normalize_embeddings': True}
-)
+    # ----------------------------------------------LOADING ----------------------------------------------------------------------------------------------------------------------#
+    #------------------------------------------------------------------------------------------------------------------------------------------#
+    # Initialize embeddings (cache in session state to avoid reloading model on every run)
+    if st.session_state.embeddings is None:
+        try:
+            with st.spinner("Loading embeddings model (first time only)..."):
+                st.session_state.embeddings = HuggingFaceEmbeddings(
+                    model_name="sentence-transformers/all-MiniLM-L6-v2",
+                    encode_kwargs={'normalize_embeddings': True}
+                )
+        except Exception as e:
+            st.error(f"❌ Failed to load embeddings model: {e}")
+            log.error("Embeddings initialization error: %s", str(e), exc_info=True)
+            st.stop()
 
-if uid != st.session_state.excel_id:
-    log.info("New Excel uploaded %s", uid)
-    st.session_state.excel_id = uid
-    st.session_state.chain = None  # Wipe old chain
+    embeddings = st.session_state.embeddings
+    if embeddings is None:
+        st.error("❌ Embeddings not initialized. Please refresh the page.")
+        st.stop()
+
+    if uid != st.session_state.excel_id:
+        log.info("New Excel uploaded %s", uid)
+        st.session_state.excel_id = uid
+        st.session_state.chain = None  # Wipe old chain
 
     # 1. Read Excel
     try:
-        # Replace the old df = pd.read_excel(uploaded) with:
-        df = pd.read_excel(uploaded, sheet_name=st.session_state.selected_sheet)
-        sheet_names = df.sheet_names
+        selected_sheet = st.session_state.get("selected_sheet")
+        if not selected_sheet:
+            # Fallback: get first sheet if not set
+            excel_file = pd.ExcelFile(uploaded)
+            selected_sheet = excel_file.sheet_names[0]
+        df = pd.read_excel(uploaded, sheet_name=selected_sheet)
     except Exception as e:
         st.error(f"❌ Could not read the Excel file: {e}")
         st.stop()
 
-    selected_sheet = st.session_state.get("selected_sheet", sheet_names[0])  # default to first
-    df = pd.read_excel(uploaded, sheet_name=selected_sheet)
-
     # Optional preview
     st.subheader(f"Data from sheet: {selected_sheet}")
-    st.dataframe(df.head(20))
+    # Convert object columns to string to avoid PyArrow serialization issues
+    df_display = df.head(20).copy()
+    for col in df_display.columns:
+        if df_display[col].dtype == 'object':
+            df_display[col] = df_display[col].astype(str)
+    st.dataframe(df_display)
 
 
     if df.empty:
@@ -172,57 +197,95 @@ if uid != st.session_state.excel_id:
     chunks = splitter.split_text("\n".join(chunks))
 
     # 4. Embed & index with Chroma (persistent)
-    vs = Chroma.from_texts(
-        texts=chunks,
-        embedding=embeddings,
-        collection_name=f"financial_excel_{uid}",
-        persist_directory="./chroma_db_excel"
-    )
-    log.info("Created new Chroma collection for %s", uid)
-else:
-    log.info("Same Excel %s → loading existing collection", uid)
-    vs = Chroma(
-        collection_name=f"financial_excel_{uid}",
-        embedding_function=embeddings,
-        persist_directory="./chroma_db_excel"
-    )
+    try:
+        with st.spinner("Creating vector database..."):
+                vs = Chroma.from_texts(
+                    texts=chunks,
+                    embedding=embeddings,
+                    collection_name=f"financial_excel_{uid}",
+                    persist_directory="./chroma_db_excel"
+                )
+        log.info("Created new Chroma collection for %s", uid)
+    except Exception as e:
+        st.error(f"❌ Failed to create vector database: {e}")
+        log.error("ChromaDB creation error: %s", str(e), exc_info=True)
+        st.stop()
+    else:
+        log.info("Same Excel %s → loading existing collection", uid)
+        try:
+            vs = Chroma(
+                collection_name=f"financial_excel_{uid}",
+                embedding_function=embeddings,
+                persist_directory="./chroma_db_excel"
+            )
+        except Exception as e:
+            st.error(f"❌ Failed to load vector database: {e}")
+            log.error("ChromaDB load error: %s", str(e), exc_info=True)
+            st.stop()
+
+    try:
+        retriever = vs.as_retriever(search_kwargs={"k": 3})
+    except Exception as e:
+        st.error(f"❌ Failed to create retriever: {e}")
+        log.error("Retriever creation error: %s", str(e), exc_info=True)
+        st.stop()
+
+    # ---------------------  -------------------------FIRST CHAIN BEFORE CACHED ----------------------------------------------------------------------------------------------------------------------#
+    #------------------------------------------------------------------------------------------------------------------------------------------#
+
+    if st.session_state.chain is None:
+        try:
+            openrouter_key = os.getenv("OPENROUTER_API_KEY")
+            if not openrouter_key:
+                st.error("❌ OPENROUTER_API_KEY not found in environment. Please set it in your .env file.")
+                st.stop()
+            with st.spinner("Initializing AI model..."):
+                llm = ChatOpenAI(
+                    base_url="https://openrouter.ai/api/v1",
+                    api_key=openrouter_key,
+                    model="deepseek/deepseek-r1-0528:free",   # ← correct OpenRouter ID
+                    temperature=0.0
+                )
+            tmpl = ChatPromptTemplate.from_template(
+                "Context (JSON rows from financial document):\n{context}\n\n"
+                "Use only the context above to answer questions about the financial data (e.g., mutual funds, scheme portfolios). "
+                "If the answer is not in the context, say 'I don't know.'\n\n"
+                "Question: {question}\nAnswer:"
+            )
+            st.session_state.chain = (
+                {"context": retriever | format_docs, "question": RunnablePassthrough()}
+                | tmpl
+                | llm
+                | StrOutputParser()
+            )
+            log.info("Chain ready for %s", uid)
+        except Exception as e:
+            st.error(f"❌ Failed to initialize AI chain: {e}")
+            log.error("Chain initialization error: %s", str(e), exc_info=True)
+            st.stop()
 
 
-retriever = vs.as_retriever(search_kwargs={"k": 3})
 
-# ---------------------  -------------------------FIRST CHAIN BEFORE CACHED ----------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------------------------------------------------------------------------------------------------------#
+    # ----------------------------------------------Q/A ----------------------------------------------------------------------------------------------------------------------#
+    #------------------------------------------------------------------------------------------------------------------------------------------#
+    chain = st.session_state.chain  # Pull cached chain
+    if chain is None:
+        st.error("❌ AI chain not initialized. Please wait for initialization to complete.")
+        st.stop()
 
-if st.session_state.chain is None:
-    llm = ChatOpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY"),
-    model="deepseek/deepseek-r1-0528:free",   # ← correct OpenRouter ID
-    temperature=0.0
-)
-    tmpl = ChatPromptTemplate.from_template(
-        "Context (JSON rows from financial document):\n{context}\n\n"
-        "Use only the context above to answer questions about the financial data (e.g., mutual funds, scheme portfolios). "
-        "If the answer is not in the context, say 'I don't know.'\n\n"
-        "Question: {question}\nAnswer:"
-    )
-    st.session_state.chain = (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
-        | tmpl
-        | llm
-        | StrOutputParser()
-    )
-    log.info("Chain ready for %s", uid)
+    question = st.text_input("Ask a question about your Excel document")
+    if question:
+        try:
+            with st.spinner("🤖 Thinking…"):
+                answer = chain.invoke(question)  # Fast: no re-loading, no re-indexing
+            log.info("Q: %s  | A: %s", question, answer)
+            st.success("Answer")
+            st.write(answer)
+        except Exception as e:
+            st.error(f"❌ Error getting response: {e}")
+            log.error("Error invoking chain: %s", str(e), exc_info=True)
 
-
-
-# ----------------------------------------------Q/A ----------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------------------------------------------------------------------------------------------------------#
-chain = st.session_state.chain  # Pull cached chain
-question = st.text_input("Ask a question about your Excel document")
-if question:
-    with st.spinner("🤖 Thinking…"):
-        answer = chain.invoke(question)  # Fast: no re-loading, no re-indexing
-    log.info("Q: %s  | A: %s", question, answer)
-    st.success("Answer")
-    st.write(answer)
+except Exception as e:
+    st.error(f"❌ Unexpected error in application: {e}")
+    log.error("Unexpected error in main execution: %s", str(e), exc_info=True)
+    st.exception(e)  # This will show the full traceback in the UI
