@@ -1,291 +1,240 @@
-
-"""
-Excel Chatbot – Streamlit app
-- Uses Google Gemini via LangChain for RAG-based Q&A on financial Excel documents (e.g., mutual funds, scheme portfolios)
-- Converts Excel rows to JSON strings for embedding
-- Embeds with GoogleGenerativeAIEmbeddings – embeddings built only once per file
-- Keeps chain in session_state for instant follow-up questions
-- Uses ChromaDB for vector store with persistence
-"""
-
-#------------------------------------------------------------------------------------------------------------------------------------------#
-#--------------------------------------------------LIBRARIES & PACKAGES----------------------------------------------------------------------------------------#
-
+# app.py
 import os
-import hashlib
-import logging
 import streamlit as st
+from pathlib import Path
+
 import pandas as pd
-import json
+from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_community.embeddings import FastEmbedEmbeddings
-from langchain_chroma import Chroma
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_google_genai import GoogleGenerativeAI
-from langchain_openai import ChatOpenAI  
+
+# ────────────────────────────────────────────────
+# CONFIG
+# ────────────────────────────────────────────────
+ 
+INDEX_DIR = "faiss_index_motilal"
+os.makedirs(INDEX_DIR, exist_ok=True)
+
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+LLM_MODEL = "deepseek/deepseek-r1"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+st.set_page_config(page_title="Motilal Oswal Portfolio RAG", layout="wide")
+
+# ────────────────────────────────────────────────
+# SECRETS & LLM
+# ────────────────────────────────────────────────
+
 try:
-    from langchain_huggingface import HuggingFaceEmbeddings
-except ImportError:
-    from langchain_community.embeddings import HuggingFaceEmbeddings
+    api_key = st.secrets["OPENROUTER_API_KEY"]
+except KeyError:
+    st.error("OPENROUTER_API_KEY not found in .streamlit/secrets.toml")
+    st.stop()
 
+llm = ChatOpenAI(
+    model=LLM_MODEL,
+    openai_api_key=api_key,
+    openai_api_base=OPENROUTER_BASE_URL,
+    temperature=0.15,
+    max_tokens=1800
+)
 
+# ────────────────────────────────────────────────
+# EMBEDDINGS (cached)
+# ────────────────────────────────────────────────
 
+@st.cache_resource
+def get_embeddings():
+    return HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME)
 
-from dotenv import load_dotenv
-load_dotenv()  # Loads .env file
+embeddings = get_embeddings()
 
+# ────────────────────────────────────────────────
+# VECTOR DB MANAGEMENT (using session_state)
+# ────────────────────────────────────────────────
 
-# ---------- logging ----------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------------------------------------------------------------------------------------------------------#
+def load_or_create_vector_db():
+    index_path = os.path.join(INDEX_DIR, "index.faiss")
+    if os.path.exists(index_path):
+        try:
+            db = FAISS.load_local(
+                INDEX_DIR,
+                embeddings,
+                allow_dangerous_deserialization=True
+            )
+            st.session_state["vector_db_loaded"] = True
+            return db
+        except Exception as e:
+            st.warning(f"Could not load FAISS index: {e}. Will create new one on upload.")
+    return None
 
-logging.basicConfig(filename="excel_chatbot.log",
-                    level=logging.INFO,
-                    format="%(asctime)s | %(message)s")
-log = logging.getLogger(__name__)
+# Initialize in session state
+if "vector_db" not in st.session_state:
+    st.session_state["vector_db"] = load_or_create_vector_db()
 
+vector_db = st.session_state["vector_db"]
 
+# ────────────────────────────────────────────────
+# PROMPT
+# ────────────────────────────────────────────────
 
-# ---------- PAGE ----------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------------------------------------------------------------------------------------------------------#
+prompt = ChatPromptTemplate.from_template("""
+You are an expert mutual fund analyst using Motilal Oswal December 2025 portfolio data.
+Answer accurately using **only** the provided context.
+Use clear structure, bullets or tables when helpful.
+If information is missing, say so clearly.
 
-st.set_page_config(page_title="Financial RAG Chatbot", layout="wide")
-st.header("📊 Financial Documents Chatbot")
+Context:
+{context}
 
+Question: {question}
 
-# ---------- HELPERS FUNCTIONS ----------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------------------------------------------------------------------------------------------------------#
+Answer:
+""")
 
 def format_docs(docs):
-    return "\n\n".join(d.page_content for d in docs)
+    return "\n\n".join(
+        f"[{doc.metadata.get('source', 'Unknown')} | Sheet: {doc.metadata.get('sheet', '?')}] {doc.page_content}"
+        for doc in docs
+    )
 
-def excel_hash(data) -> str:
-    return hashlib.sha256(data.getbuffer()).hexdigest()[:16]
+# ────────────────────────────────────────────────
+# RAG CHAIN
+# ────────────────────────────────────────────────
 
+def get_rag_chain(db):
+    if db is None:
+        return None
+    retriever = db.as_retriever(search_kwargs={"k": 8})
+    return (
+        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
 
-# ---------- SIDEBAR ----------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------------------------------------------------------------------------------------------------------#
+# ────────────────────────────────────────────────
+# EXCEL → Documents
+# ────────────────────────────────────────────────
 
-# Initialize api_key before sidebar to ensure it's always defined
-api_key = os.getenv("GOOGLE_API_KEY", "")
+def excel_to_docs(file_path: str):
+    docs = []
+    try:
+        xl = pd.ExcelFile(file_path)
+        for sheet_name in xl.sheet_names:
+            df = pd.read_excel(xl, sheet_name=sheet_name, header=None)
+            # Very basic conversion – improve later if needed
+            text = df.fillna("").astype(str).apply(lambda row: " | ".join(row.values), axis=1).str.cat(sep="\n")
+            doc = Document(
+                page_content=text.strip(),
+                metadata={
+                    "source": Path(file_path).name,
+                    "sheet": sheet_name,
+                    "file_type": "excel"
+                }
+            )
+            docs.append(doc)
+    except Exception as e:
+        st.error(f"Failed to parse {Path(file_path).name}: {e}")
+    return docs
+
+# ────────────────────────────────────────────────
+# SIDEBAR – Upload
+# ────────────────────────────────────────────────
 
 with st.sidebar:
-    st.title("Your Documents")
-    uploaded = st.file_uploader("Upload an Excel file", type=["xlsx", "xls"])
-    
-    # API key part
-    if not api_key:
-        api_key = st.text_input("Google API Key (or set in .env file)", type="password", value="")
-        if not api_key:
-            st.warning("Please enter your Google API Key (or add to .env).")
-            st.stop()
-    else:
-        st.success("API key loaded from .env file ✅")
+    st.header("Index Management")
 
-    # NEW: Sheet selector – only show after file upload
-    if uploaded is not None:
-        try:
-            # Excel file load sheet names 
-            excel_file = pd.ExcelFile(uploaded)
-            sheet_names = excel_file.sheet_names
-        except Exception as e:
-            st.error(f"Sheet names load Nope: {e}")
-            st.stop()
-
-        # Dropdown to choose sheet
-        selected_sheet = st.selectbox(
-            "Select Sheet for Query",
-            sheet_names,
-            index=0,  # default first sheet
-            key="selected_sheet"  # important: session state key
-        )
-        
-        st.info(f"Selected: **{selected_sheet}**")   
-    
-    
-
-# ---------- API KEY ----------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------------------------------------------------------------------------------------------------------#
-if api_key:
-    os.environ["GOOGLE_API_KEY"] = api_key
-
-# -------------------------------------- SESSION KEYS ----------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------------------------------------------------------------------------------------------------------#
-if "excel_id" not in st.session_state:
-    st.session_state.excel_id = None
-if "chain" not in st.session_state: # Cache the complete chain so we do NOT rebuild it every run
-    st.session_state.chain = None
-if "embeddings" not in st.session_state: # Cache embeddings to avoid reloading model
-    st.session_state.embeddings = None
-
-# ----------------------------------------------MAIN ----------------------------------------------------------------------------------------------------------------------#
-#------------------------------------------------------------------------------------------------------------------------------------------#
-try:
-    if uploaded is None:
-        st.info("👆 Upload an Excel file to start")
-        st.stop()
-
-    uid = excel_hash(uploaded)
-    log.info("Starting main execution for file: %s", uid)
-
-    # ----------------------------------------------LOADING ----------------------------------------------------------------------------------------------------------------------#
-    #------------------------------------------------------------------------------------------------------------------------------------------#
-    # Initialize embeddings (cache in session state to avoid reloading model on every run)
-    if st.session_state.embeddings is None:
-        try:
-            with st.spinner("Loading embeddings model (first time only)..."):
-                st.session_state.embeddings = HuggingFaceEmbeddings(
-                    model_name="sentence-transformers/all-MiniLM-L6-v2",
-                    encode_kwargs={'normalize_embeddings': True}
-                )
-        except Exception as e:
-            st.error(f"❌ Failed to load embeddings model: {e}")
-            log.error("Embeddings initialization error: %s", str(e), exc_info=True)
-            st.stop()
-
-    embeddings = st.session_state.embeddings
-    if embeddings is None:
-        st.error("❌ Embeddings not initialized. Please refresh the page.")
-        st.stop()
-
-    if uid != st.session_state.excel_id:
-        log.info("New Excel uploaded %s", uid)
-        st.session_state.excel_id = uid
-        st.session_state.chain = None  # Wipe old chain
-
-    # 1. Read Excel
-    try:
-        selected_sheet = st.session_state.get("selected_sheet")
-        if not selected_sheet:
-            # Fallback: get first sheet if not set
-            excel_file = pd.ExcelFile(uploaded)
-            selected_sheet = excel_file.sheet_names[0]
-        df = pd.read_excel(uploaded, sheet_name=selected_sheet)
-    except Exception as e:
-        st.error(f"❌ Could not read the Excel file: {e}")
-        st.stop()
-
-    # Optional preview
-    st.subheader(f"Data from sheet: {selected_sheet}")
-    # Convert object columns to string to avoid PyArrow serialization issues
-    df_display = df.head(20).copy()
-    for col in df_display.columns:
-        if df_display[col].dtype == 'object':
-            df_display[col] = df_display[col].astype(str)
-    st.dataframe(df_display)
-
-
-    if df.empty:
-        st.error("❌ The Excel file is empty.")
-        st.stop()
-
-    # 2. Convert rows to JSON strings
-    # chunks = [json.dumps(row) for row in json_rows] -- GIVING FULL ROW WHICH INCREASE TIME FOR OUTPUTS
-    #Updates shrinking row by giving Neccessary Details.
-    # NEW – keep just the columns users actually ask about
-    KEEP = ["Name of Instrument","Quantity","Market value (Rs. In lakhs)","% to Net Assets","Sector / Rating"]
-    json_rows = df.to_dict(orient='records')
-    mini_rows = [{k: (round(v,2) if isinstance(v,float) else v) for k,v in row.items() if k in KEEP} for row in json_rows] # COlumn filter
-    chunks = list(dict.fromkeys(json.dumps(m) for m in mini_rows)) # Uniquify
-
-    # 3. Optional: Split large JSON chunks if needed
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=750, chunk_overlap=50
+    uploaded_files = st.file_uploader(
+        "Upload Motilal Oswal Excel files",
+        type=["xlsx"],
+        accept_multiple_files=True
     )
-    chunks = splitter.split_text("\n".join(chunks))
 
-    # 4. Embed & index with Chroma (persistent)
-    try:
-        with st.spinner("Creating vector database..."):
-                vs = Chroma.from_texts(
-                    texts=chunks,
-                    embedding=embeddings,
-                    collection_name=f"financial_excel_{uid}",
-                    persist_directory="./chroma_db_excel"
+    if uploaded_files and st.button("Process & Index Files", type="primary"):
+        with st.status("Processing files...", expanded=True) as status:
+            all_new_docs = []
+
+            for uploaded_file in uploaded_files:
+                temp_path = f"temp_{uploaded_file.name}"
+                with open(temp_path, "wb") as f:
+                    f.write(uploaded_file.getvalue())
+
+                status.write(f"Reading {uploaded_file.name}...")
+                docs = excel_to_docs(temp_path)
+                all_new_docs.extend(docs)
+
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+
+            if not all_new_docs:
+                status.update(label="No valid documents extracted", state="error")
+            else:
+                status.update(label=f"Extracted {len(all_new_docs)} sheets. Chunking...", state="running")
+
+                splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=1000,
+                    chunk_overlap=200,
+                    separators=["\n\n", "\n", " | ", ". ", " ", ""]
                 )
-        log.info("Created new Chroma collection for %s", uid)
-    except Exception as e:
-        st.error(f"❌ Failed to create vector database: {e}")
-        log.error("ChromaDB creation error: %s", str(e), exc_info=True)
-        st.stop()
+                chunks = splitter.split_documents(all_new_docs)
+
+                status.update(label=f"Creating / updating index ({len(chunks)} chunks)...", state="running")
+
+                if st.session_state["vector_db"] is None:
+                    st.session_state["vector_db"] = FAISS.from_documents(chunks, embeddings)
+                else:
+                    st.session_state["vector_db"].add_documents(chunks)
+
+                st.session_state["vector_db"].save_local(INDEX_DIR)
+                status.update(
+                    label=f"Done! Total documents: {len(st.session_state['vector_db'].docstore._dict)}",
+                    state="complete"
+                )
+
+    st.markdown("---")
+    count = len(st.session_state["vector_db"].docstore._dict) if st.session_state.get("vector_db") else 0
+    if count > 0:
+        st.success(f"Index ready – {count} documents")
     else:
-        log.info("Same Excel %s → loading existing collection", uid)
-        try:
-            vs = Chroma(
-                collection_name=f"financial_excel_{uid}",
-                embedding_function=embeddings,
-                persist_directory="./chroma_db_excel"
-            )
-        except Exception as e:
-            st.error(f"❌ Failed to load vector database: {e}")
-            log.error("ChromaDB load error: %s", str(e), exc_info=True)
-            st.stop()
+        st.info("Upload files and click 'Process & Index Files'")
 
-    try:
-        retriever = vs.as_retriever(search_kwargs={"k": 3})
-    except Exception as e:
-        st.error(f"❌ Failed to create retriever: {e}")
-        log.error("Retriever creation error: %s", str(e), exc_info=True)
-        st.stop()
+# ────────────────────────────────────────────────
+# MAIN CHAT
+# ────────────────────────────────────────────────
 
-    # ---------------------  -------------------------FIRST CHAIN BEFORE CACHED ----------------------------------------------------------------------------------------------------------------------#
-    #------------------------------------------------------------------------------------------------------------------------------------------#
+st.title("Motilal Oswal Portfolio Chatbot")
 
-    if st.session_state.chain is None:
-        try:
-            openrouter_key = os.getenv("OPENROUTER_API_KEY")
-            if not openrouter_key:
-                st.error("❌ OPENROUTER_API_KEY not found in environment. Please set it in your .env file.")
-                st.stop()
-            with st.spinner("Initializing AI model..."):
-                llm = ChatOpenAI(
-                    base_url="https://openrouter.ai/api/v1",
-                    api_key=openrouter_key,
-                    model="deepseek/deepseek-r1-0528:free",   # ← correct OpenRouter ID
-                    temperature=0.0
-                )
-            tmpl = ChatPromptTemplate.from_template(
-                "Context (JSON rows from financial document):\n{context}\n\n"
-                "Use only the context above to answer questions about the financial data (e.g., mutual funds, scheme portfolios). "
-                "If the answer is not in the context, say 'I don't know.'\n\n"
-                "Question: {question}\nAnswer:"
-            )
-            st.session_state.chain = (
-                {"context": retriever | format_docs, "question": RunnablePassthrough()}
-                | tmpl
-                | llm
-                | StrOutputParser()
-            )
-            log.info("Chain ready for %s", uid)
-        except Exception as e:
-            st.error(f"❌ Failed to initialize AI chain: {e}")
-            log.error("Chain initialization error: %s", str(e), exc_info=True)
-            st.stop()
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
+if user_input := st.chat_input("Ask about any scheme, holding, sector, allocation..."):
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
 
-    # ----------------------------------------------Q/A ----------------------------------------------------------------------------------------------------------------------#
-    #------------------------------------------------------------------------------------------------------------------------------------------#
-    chain = st.session_state.chain  # Pull cached chain
-    if chain is None:
-        st.error("❌ AI chain not initialized. Please wait for initialization to complete.")
-        st.stop()
+    with st.chat_message("assistant"):
+        with st.spinner("Searching..."):
+            chain = get_rag_chain(st.session_state["vector_db"])
+            if chain is None:
+                response = "No data indexed yet.\n\nPlease upload Excel files in the sidebar and process them."
+            else:
+                try:
+                    response = chain.invoke(user_input)
+                except Exception as e:
+                    response = f"Error during query: {str(e)}"
 
-    question = st.text_input("Ask a question about your Excel document")
-    if question:
-        try:
-            with st.spinner("🤖 Thinking…"):
-                answer = chain.invoke(question)  # Fast: no re-loading, no re-indexing
-            log.info("Q: %s  | A: %s", question, answer)
-            st.success("Answer")
-            st.write(answer)
-        except Exception as e:
-            st.error(f"❌ Error getting response: {e}")
-            log.error("Error invoking chain: %s", str(e), exc_info=True)
+        st.markdown(response)
 
-except Exception as e:
-    st.error(f"❌ Unexpected error in application: {e}")
-    log.error("Unexpected error in main execution: %s", str(e), exc_info=True)
-    st.exception(e)  # This will show the full traceback in the UI
+    st.session_state.messages.append({"role": "assistant", "content": response})
