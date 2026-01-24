@@ -11,6 +11,7 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.documents import Document
 
+
 # ──── CONFIGURATION ────
 FAISS_INDEX_DIR = r"E:\Work\FinanceRagChatBot\db\faiss_motilal"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -68,35 +69,64 @@ Context:
 {context}
 
 Question: {question}
-
-Answer:
+                                          
+Answer clearly, include fund name/code for each holding mentioned.
+When comparing funds, show side-by-side tables or lists.
+Use % to Net Assets for "top holdings".
+If information for a fund is missing, say so.
 """)
 
-def format_docs(docs):
-    return "\n\n".join(
-        f"[{doc.metadata.get('fund', 'Unknown')}] {doc.page_content}"
-        for doc in docs
-    )
+def format_docs_with_fund(docs):
+    formatted = []
+    for doc in docs:
+        fund_name = doc.metadata.get("fund_name", "Unknown Fund")
+        fund_code = doc.metadata.get("fund_code", "Unknown")
+        content = doc.page_content
+        formatted.append(
+            f"Fund: {fund_name} ({fund_code})\n"
+            f"{content}\n"
+            f"Percentage: {content.split('•')[-2].strip() if '•' in content else 'N/A'} % to Net Assets\n"
+            "---"
+        )
+    return "\n\n".join(formatted)
 
-def get_rag_chain():
+# Then context = format_docs_with_fund(retrieved_docs)
+
+def get_rag_chain(question: str = None):   # ← add optional question param
     if vectorstore is None:
         return None
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 6})
+
+    # Default retriever (no filter)
+    search_kwargs = {"k": 30}
+
+    # If question is provided and looks like a comparison → force both funds
+    if question:
+        q_lower = question.lower()
+        if any(word in q_lower for word in ["compare", "vs", "between", "top of", "holdings of both"]):
+            # Force retrieval from both funds (YO16 = Midcap 150, YO17 = Smallcap 250)
+            search_kwargs["filter"] = {
+                "fund_code": {"$in": ["YO16", "YO17"]}
+            }
+            search_kwargs["k"] = 40   # get more results so both funds are well represented
+
+    retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
+
     return (
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}
+        {"context": retriever | format_docs_with_fund, "question": RunnablePassthrough()}
         | prompt
         | llm
         | StrOutputParser()
     )
 
+
 # ──── STREAMLIT UI ────
 st.title("Financial-RAG Chatbot")
-st.markdown("Ask questions about Motilal Oswal holdings or upload new .pkl files to add funds.")
+st.markdown("Ask questions about Motilal Oswal holdings or upload new files to add funds.")
 
 # Sidebar - Upload & status
 with st.sidebar:
     st.header("Manage Index")
-    uploaded_file = st.file_uploader("Upload new .pkl file", type=["pkl"])
+    uploaded_file = st.file_uploader("Upload new .pkl file", type=["json"])
 
     if uploaded_file:
         try:
@@ -150,3 +180,47 @@ if prompt_text := st.chat_input("Ask about the portfolio..."):
         st.markdown(response)
     
     st.session_state.messages.append({"role": "assistant", "content": response})
+
+
+import json
+uploaded_file = st.file_uploader("Upload new .json file", type=["json"])
+
+if uploaded_file:
+    try:
+        raw_data = json.load(uploaded_file)
+
+        if not isinstance(raw_data, list):
+            st.error("JSON must be a list of documents")
+        else:
+            new_docs = []
+            for item in raw_data:
+                if "page_content" not in item:
+                    continue
+                new_docs.append(
+                    Document(
+                        page_content=item["page_content"],
+                        metadata=item.get("metadata", {})
+                    )
+                )
+
+            if not new_docs:
+                st.error("No valid documents found in JSON")
+            else:
+                if vectorstore is None:
+                    st.info("Creating new FAISS index...")
+                    vectorstore = FAISS.from_documents(new_docs, embeddings)
+                else:
+                    st.info(f"Adding {len(new_docs)} documents...")
+                    vectorstore.add_documents(new_docs)
+
+                vectorstore.save_local(FAISS_INDEX_DIR)
+                st.success(
+                    f"Added {len(new_docs)} documents. "
+                    f"Total ≈ {len(vectorstore.docstore._dict)}"
+                )
+                st.session_state["faiss_loaded"] = True
+
+    except json.JSONDecodeError:
+        st.error("Invalid JSON file")
+    except Exception as e:
+        st.error(f"Upload failed: {e}")
