@@ -63,13 +63,22 @@ def chunk_documents(docs: List[Document]) -> List[Document]:
 
     chunked_docs = []
     for doc in docs:
+        original_prefix = f"[Fund: {doc.metadata.get('fund_name', 'Unknown')} | Code: {doc.metadata.get('fund_code', 'UNK')}] "
+        
         sub_chunks = splitter.split_text(doc.page_content)
+        
         for i, chunk_text in enumerate(sub_chunks):
+            # Always include prefix on first chunk, and also on continuations
+            content_to_use = chunk_text
+            if i > 0:
+                content_to_use = original_prefix + chunk_text
+            
             new_doc = Document(
-                page_content=chunk_text,
+                page_content=content_to_use,
                 metadata={
                     **doc.metadata,
                     "chunk_id": i,
+                    "original_chunk_start": i * (CHUNK_SIZE - CHUNK_OVERLAP),
                     "original_row": doc.metadata.get("row_number"),
                     "pipeline_step": "chunked"
                 }
