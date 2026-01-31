@@ -13,7 +13,7 @@ import pandas as pd  # data handling and Excel I/O
 from langchain_core.documents import Document  # LangChain Document type
 
 # ──── CONFIG ────
-EXCEL_FILE = r"E:\Work\FinanceRagChatBot\data\raw\db566-scheme-portfolio-details-december-2025.xlsx"  # path to source Excel
+EXCEL_FILE =   # path to source Excel
 OUTPUT_FOLDER = "temp_pickles"  # output folder for generated artifacts
 START_ROW = 3                     # 0-based -> usually row 4 in Excel (headers)  # starting row index
 MAX_ROWS = 150                    # increased slightly for safety  # max rows to read
