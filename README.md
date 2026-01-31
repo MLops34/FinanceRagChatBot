@@ -18,29 +18,27 @@ This project processes Motilal Oswal's scheme portfolio details from Excel files
 
 ## Project Structure
 
-```
 FinanceRagChatBot/
 ├── data/
 │   └── raw/
-│       └── db566-scheme-portfolio-details-december-2025.xlsx   # Source portfolio Excel file
+│       └── db566-scheme-portfolio-details-december-2025.xlsx
 ├── db/
-│   └── faiss_motilal/                                         # Persistent FAISS vector index
-├── temp_pickles/                                              # Intermediate JSON files from ingestion
-├── .gitattributes                                             # Git configuration
-├── .gitignore                                                 # Git ignore patterns
-├── app.py                                                     # Legacy or alternative Streamlit app
-├── Chunk-02.py                                                # Document chunking script
-├── DecisionNode.py                                            # Main Streamlit chatbot with decision node
-├── Dockerfile                                                 # Docker build configuration
-├── docker-compose.yml                                         # Docker Compose for multi-container setup
-├── Embed-03.py                                                # Embedding and FAISS update script
-├── Fetch-01.py                                                # Excel ingestion to documents (JSON)
-├── inter-04.py                                                # Alternative chatbot version with decision node
-├── README.md                                                  # This documentation
-├── requirements.txt                                           # Python dependencies
-├── Retrieval.py                                               # Utility for inspecting retrieved chunks
-└── AI Financial Analyst Agent (RAG-BASED LLM).pptx            # Project presentation overview
-```
+│   └── faiss_motilal/
+├── temp_pickles/
+├── .gitattributes
+├── .gitignore
+├── app.py
+├── Chunk-02.py
+├── DecisionNode.py
+├── Dockerfile
+├── docker-compose.yml
+├── Embed-03.py
+├── Fetch-01.py
+├── inter-04.py
+├── README.md
+├── requirements.txt
+├── Retrieval.py
+└── AI Financial Analyst Agent (RAG-BASED LLM).pptx
 
 ## Requirements
 
