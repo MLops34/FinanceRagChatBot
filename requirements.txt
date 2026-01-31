@@ -1,0 +1,8 @@
+streamlit
+langchain
+langchain-community
+langchain-huggingface
+langchain-openai
+faiss-cpu
+sentence-transformers
+python-dotenv          # if you use .env
