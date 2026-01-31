@@ -7,8 +7,8 @@ Step 1: Load Motilal Oswal portfolio Excel sheet -> create lean LangChain Docume
 - Saves to pickle
 """  # module-level description
 
-import os  # filesystem utilities
-import pickle  # binary serialization (kept for compatibility)
+import os  
+import pickle  
 import pandas as pd  # data handling and Excel I/O
 from langchain_core.documents import Document  # LangChain Document type
 
@@ -76,8 +76,10 @@ def load_sheet_to_documents(sheet_name: str) -> list[Document]:  # convert a she
         if not cells:
             continue  # skip empty rows
 
-        row_content = " • ".join(cells)  # human-readable joined content
-
+        # row_content = " • ".join(cells)  # human-readable joined content
+        prefix = f"[Fund: {fund_name} | Code: {sheet_name.upper()}] "
+        row_content = prefix + " • ".join(cells)
+        
         # Skip summary rows
         lower_content = row_content.lower()  # lowercase for keyword checks
         if any(kw in lower_content for kw in summary_keywords):
@@ -100,19 +102,32 @@ def load_sheet_to_documents(sheet_name: str) -> list[Document]:  # convert a she
             sector = cells[-1] if cells[-1] and cells[-1] not in ["Percent", ""] else cells[-2] if len(cells) > 2 else ""  # heuristic for sector
 
         # Create lean metadata
+                # Create lean metadata
         metadata = {
-            "source": os.path.basename(EXCEL_FILE),  # source filename
-            "fund_code": sheet_name.upper(),  # normalized sheet/fund code
-            "fund_name": fund_name,  # full fund name
-            "portfolio_date": PORTFOLIO_DATE,  # configured portfolio date
-            "row_number": int(row_idx) + 1,          # 1-based Excel row
-            "isin": isin.strip() if isin else "",  # cleaned ISIN
-            "instrument": instrument.strip() if instrument else "",  # cleaned instrument
-            "sector": sector.strip() if sector else "",  # cleaned sector
+            "source": os.path.basename(EXCEL_FILE),
+            "fund_code": sheet_name.upper(),
+            "fund_name": fund_name,
+            "portfolio_date": PORTFOLIO_DATE,
+            "row_number": int(row_idx) + 1,
+            "isin": isin.strip() if isin else "",
+            "instrument": instrument.strip() if instrument else "",
+            "sector": sector.strip() if sector else "",
         }
 
-        doc = Document(page_content=row_content, metadata=metadata)  # create Document
-        documents.append(doc)  # collect it
+        # ← Add this block here
+        metadata["fund_name_normalized"] = (
+            fund_name.lower()
+            .replace("motilal oswal ", "")
+            .replace("fund", "")
+            .replace("scheme", "")
+            .replace("direct", "")
+            .replace("growth", "")
+            .replace("regular", "")
+            .strip()
+        )
+
+        doc = Document(page_content=row_content, metadata=metadata)
+        documents.append(doc)
 
     if documents:
         print(f"→ Created {len(documents)} documents from {sheet_name}")  # success message
