@@ -1,0 +1,30 @@
+# docker-compose.yml
+version: '3.9'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: motilal-rag-app
+    ports:
+      - "8501:8501"                   # Streamlit default port
+    volumes:
+      - ./db/faiss_motilal:/app/db/faiss_motilal   # Mount your FAISS index folder
+      # If you have other persistent folders (logs, temp pickles, etc.), add them here
+      # - ./logs:/app/logs
+    environment:
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}   # Will read from your .env or shell
+      - PYTHONUNBUFFERED=1                         # Better logging
+    restart: unless-stopped
+    command: >
+      streamlit run DecisionNode.py
+      --server.port=8501
+      --server.address=0.0.0.0
+      --server.enableCORS=false
+      --server.enableXsrfProtection=false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
