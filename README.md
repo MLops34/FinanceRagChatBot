@@ -15,13 +15,12 @@ It:
 ## Project Structure
 
 - **`data/raw/db566-scheme-portfolio-details-december-2025.xlsx`**: Source Motilal Oswal portfolio Excel.
-- **`DocLoad.py`**: Quick utility to inspect and export a single scheme’s holdings to CSV.
-- **`Fetch.py`**: **Step 1** – Load one Excel sheet → create LangChain `Document` list → save to `temp_pickles/*_docs.pkl`.
+- **`Testload.py`**: **Step 1** – Load one Excel sheet → create LangChain `Document` list → save to `temp_pickles/*_docs.pkl`.
 - **`Chunk.py`**: **Step 2 (optional)** – Chunk or pass‑through documents → save to `temp_pickles/*_ready.pkl` (or `*_chunks.pkl`).
 - **`Embed.py`**: **Step 3** – Embed selected pickle file and update persistent FAISS index in `db/faiss_motilal`.
 - **`db/faiss_motilal/`**: Persistent FAISS index used by the chatbot.
 - **`temp_pickles/`**: Intermediate `.pkl` files produced by the pipeline.
-- **`newapp.py`**: Streamlit RAG chatbot over the FAISS index (DeepSeek R1 via OpenRouter).
+- **`Inter.py`**: Streamlit RAG chatbot over the FAISS index (DeepSeek R1 via OpenRouter). You can Use other Open Source Model As well.
 
 -
 
