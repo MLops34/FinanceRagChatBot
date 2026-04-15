@@ -1,13 +1,13 @@
 ```markdown
-# Financial RAG Chatbot: Motilal Oswal Portfolio Analyzer
+Financial RAG Chatbot: Motilal Oswal Portfolio Analyzer
 
 A robust Retrieval-Augmented Generation (RAG) system designed to provide accurate, context-aware answers to queries about Motilal Oswal mutual fund portfolios (as of December 2025). Built with LangChain, Streamlit, and FAISS for vector storage, this chatbot intelligently routes questions to specific funds or across multiple funds using a decision node. It supports ingestion from Excel, optional chunking, embedding, and a user-friendly web interface.
 
-## Overview
+ Overview
 
 This project processes Motilal Oswal's scheme portfolio details from Excel files, converts them into searchable documents, embeds them using sentence transformers, and stores them in a persistent FAISS index. The Streamlit-based chatbot leverages an LLM (e.g., DeepSeek R1 via OpenRouter) for natural-language queries, with smart routing for single-fund, multi-fund, or portfolio-wide analysis.
 
-### Key Features
+# Key Features
 - **Intelligent Fund Routing**: Uses a decision node to detect and filter by fund codes (e.g., YO07, YO16) or names from queries.
 - **Modular Pipeline**: Separate scripts for data loading, chunking, embedding, and querying.
 - **Persistent Vector Store**: FAISS index for efficient semantic search with metadata filtering.
@@ -16,7 +16,7 @@ This project processes Motilal Oswal's scheme portfolio details from Excel files
 - **Secure LLM Integration**: Configurable via environment variables or Streamlit secrets.
 - **Hallucination Guards**: Strict prompting to ensure answers are based solely on provided context.
 
-## Project Structure
+ Project Structure
 
 FinanceRagChatBot/
 ├── data/
@@ -40,13 +40,13 @@ FinanceRagChatBot/
 ├── Retrieval.py
 └── AI Financial Analyst Agent (RAG-BASED LLM).pptx
 
-## Requirements
+ Requirements
 
 - Python 3.10+
 - Docker (for containerized deployment)
 - OpenRouter API key (for LLM access; sign up at [openrouter.ai](https://openrouter.ai))
 
-## Installation
+ Installation
 
 1. **Clone the Repository**  
    ```bash
@@ -73,9 +73,9 @@ FinanceRagChatBot/
      export OPENROUTER_API_KEY="your-openrouter-api-key"
      ```
 
-## Usage
+ Usage
 
-### Data Ingestion Pipeline
+# Data Ingestion Pipeline
 Process the Excel data step-by-step to build the vector index.
 
 1. **Ingest Excel to Documents** (`Fetch-01.py`):  
@@ -99,7 +99,7 @@ Process the Excel data step-by-step to build the vector index.
    ```
    - Select the JSON file to embed. The index is saved/updated in `db/faiss_motilal/`.
 
-### Running the Chatbot
+# Running the Chatbot
 Launch the Streamlit app:  
 ```bash
 streamlit run DecisionNode.py
@@ -108,16 +108,16 @@ streamlit run DecisionNode.py
 - Upload additional JSON documents via the sidebar if needed.
 - Ask questions in the chat interface (e.g., "Top holdings of YO16" or "Compare YO16 vs YO46").
 
-### Debugging Retrieval
+# Debugging Retrieval
 Use `Retrieval.py` to inspect retrieved chunks:  
 ```bash
 streamlit run Retrieval.py
 ```
 - Enter a query and view matched documents with metadata.
 
-## Docker Deployment
+ Docker Deployment
 
-### Build and Run
+# Build and Run
 1. **Build the Image**  
    ```bash
    docker build -t finance-rag-chatbot .
@@ -135,29 +135,29 @@ streamlit run Retrieval.py
    ```
    - Access at `http://localhost:8501`.
 
-### Using Docker Compose
+ Using Docker Compose
 ```bash
 docker-compose up -d
 ```
 - Stops and restarts with `docker-compose down` / `up -d`.
 
-## Architecture
+ Architecture
 - **Ingestion**: Excel → Pandas → LangChain Documents (JSON) → Optional Chunking.
 - **Embedding**: Sentence Transformers → FAISS vector store with metadata (fund_code, fund_name).
 - **Routing/Decision Node**: LLM-based extraction of fund codes/names → dynamic FAISS filtering.
 - **Querying**: Streamlit chat → Retrieval (filtered) → Context formatting → LLM prompting → Response.
 - **Debugging**: Retrieval inspector and UI toggles for transparency.
 
-## Troubleshooting
+ Troubleshooting
 - **FAISS Load Error**: Ensure `db/faiss_motilal/` exists and is not corrupted. Delete and re-embed if needed.
 - **API Issues**: Verify OpenRouter key and network connectivity.
 - **White Screen in Streamlit**: Check terminal for tracebacks; ensure session state is initialized early.
 - **Retrieval Mismatch**: Add fund prefixes in `Fetch-01.py` for better semantic relevance.
 
-## Contributing
+ Contributing
 Contributions are welcome! Please fork the repository and submit pull requests for improvements, bug fixes, or new features.
 
-## License
+ License
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ---
