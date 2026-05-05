@@ -1,4 +1,3 @@
-
 """
 Step 4: RAG Chatbot with Decision Node for Multi-Fund Queries
 - Loads FAISS index from Step 3
@@ -6,26 +5,22 @@ Step 4: RAG Chatbot with Decision Node for Multi-Fund Queries
 - Smart routing for single/multi-fund queries
 """
 
-import os 
-import re 
-from httpx import codes 
-import streamlit as st 
-import traceback 
-from typing import List ,Dict ,Tuple ,Optional 
-from dataclasses import dataclass 
+import os
+import re
+from httpx import codes
+import streamlit as st
+import traceback
+from typing import List ,Dict ,Tuple ,Optional
+from dataclasses import dataclass
 
-from langchain_huggingface import HuggingFaceEmbeddings 
-from langchain_community .vectorstores import FAISS 
-from langchain_openai import ChatOpenAI 
-from langchain_core .prompts import ChatPromptTemplate 
-from langchain_core .runnables import RunnablePassthrough ,RunnableLambda 
-from langchain_core .output_parsers import StrOutputParser 
-from langchain_core .documents import Document 
-from Retrieval import retrieve_chunks ,get_vectorstore 
-
-
-
-
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community .vectorstores import FAISS
+from langchain_openai import ChatOpenAI
+from langchain_core .prompts import ChatPromptTemplate
+from langchain_core .runnables import RunnablePassthrough ,RunnableLambda
+from langchain_core .output_parsers import StrOutputParser
+from langchain_core .documents import Document
+from Retrieval import retrieve_chunks ,get_vectorstore
 
 PROJECT_ROOT =os .path .dirname (os .path .abspath (__file__ ))
 PERSIST_FAISS_DIR =os .path .join (PROJECT_ROOT ,"db","faiss_motilal")
@@ -36,40 +31,30 @@ LLM_MODEL ="deepseek/deepseek-r1"
 
 st .set_page_config (page_title ="Motilal Oswal Fund Analyzer",layout ="wide")
 
-
 def is_openrouter_key_configured ()->bool :
     """Basic guard so we fail fast with a useful setup message."""
     return bool (OPENROUTER_API_KEY )and OPENROUTER_API_KEY !="your-key-here"
 
-
-
-
-
 if "messages"not in st .session_state :
     st .session_state .messages =[]
 if "show_debug"not in st .session_state :
-    st .session_state .show_debug =False 
+    st .session_state .show_debug =False
 if "last_decision"not in st .session_state :
-    st .session_state .last_decision =None 
+    st .session_state .last_decision =None
 if "last_retrieval"not in st .session_state :
-    st .session_state .last_retrieval =None 
+    st .session_state .last_retrieval =None
 
-
-
-
-
-@dataclass 
+@dataclass
 class RoutingDecision :
     target_codes :List [str ]
-    explanation :str 
-    retrieve_all :bool 
-    k_value :int 
-    is_comparison :bool 
-
+    explanation :str
+    retrieve_all :bool
+    k_value :int
+    is_comparison :bool
 
 class FundDecisionNode :
     def __init__ (self ,vs :Optional [FAISS ]):
-        self .vectorstore =vs 
+        self .vectorstore =vs
         self .code_to_name :Dict [str ,str ]={}
         self .name_to_code :Dict [str ,List [str ]]={}
         self ._build_mappings ()
@@ -80,7 +65,7 @@ class FundDecisionNode :
         Uses both full name and the pre-computed 'fund_name_normalized' field.
         """
         if not self .vectorstore :
-            return 
+            return
 
         self .code_to_name ={}
         self .name_to_code ={}
@@ -88,17 +73,15 @@ class FundDecisionNode :
         for doc in self .vectorstore .docstore ._dict .values ():
             code =doc .metadata .get ("fund_code")
             if not code :
-                continue 
+                continue
 
             code =code .upper ()
             name =doc .metadata .get ("fund_name","").strip ()
 
-
             if code in self .code_to_name :
-                continue 
+                continue
 
-            self .code_to_name [code ]=name 
-
+            self .code_to_name [code ]=name
 
             normalized =doc .metadata .get ("fund_name_normalized",name .lower ().strip ())
 
@@ -117,7 +100,6 @@ class FundDecisionNode :
             name .lower ().replace ("motilal oswal ","").replace (" fund",""),
             ]
 
-
             words =name .split ()
             noise_words ={
             "motilal","oswal","fund","direct","growth","scheme","plan",
@@ -129,7 +111,6 @@ class FundDecisionNode :
                 wl =word .lower ().strip ("().,-;:")
                 if len (wl )>3 and wl not in noise_words :
                     variations .append (wl )
-
 
             lower_norm =normalized .lower ()
             if "flexi"in lower_norm :
@@ -146,9 +127,7 @@ class FundDecisionNode :
             if "smallcap"in lower_norm :
                 variations .append ("small cap")
 
-
             variations =[v .strip ()for v in variations if v .strip ()]
-
 
             for var in set (variations ):
                 if var not in self .name_to_code :
@@ -161,11 +140,9 @@ class FundDecisionNode :
         ql =question .lower ().strip ()
         detected =[]
 
-
         for match in re .findall (r"\b([A-Z]{1,3}\d{2,4})\b",qu ):
             if match in self .code_to_name :
                 detected .append (match )
-
 
         detected =[]
 
@@ -173,17 +150,14 @@ class FundDecisionNode :
 
             if re .search (r'\b'+re .escape (name_var )+r'\b',ql ,re .IGNORECASE ):
                 detected .extend (codes )
-                continue 
-
+                continue
 
         cleaned =name_var .replace ("motilal oswal ","").replace (" fund","").strip ()
         if cleaned and re .search (r'\b'+re .escape (cleaned )+r'\b',ql ,re .IGNORECASE ):
             detected .extend (codes )
 
-
         seen =set ()
         unique =[c for c in detected if not (c in seen or seen .add (c ))]
-
 
         comp_terms =["compare","vs","versus","between","difference","better","worse","higher","lower","both","which is"]
         multi_terms =["all funds","every fund","across funds","funds have","multiple funds"]
@@ -238,7 +212,7 @@ Nothing else.
             openai_api_key =OPENROUTER_API_KEY ,
             openai_api_base =OPENROUTER_BASE_URL ,
             temperature =0 ,
-            max_tokens =50 
+            max_tokens =50
             )
             llm_response =llm .invoke (prompt )
             if hasattr (llm_response ,"content"):
@@ -257,36 +231,26 @@ Nothing else.
                 f"LLM: {', '.join (valid )}",
                 False ,
                 40 *len (valid ),
-                len (valid )>1 
+                len (valid )>1
                 )
         except Exception as e :
             st .warning (f"LLM fail: {e }")
 
         return RoutingDecision ([],"Fallback ALL",True ,80 ,False )
 
-
-
-
-
 @st .cache_resource (show_spinner =False )
 def load_vectorstore ():
     if not os .path .exists (PERSIST_FAISS_DIR ):
-        return None 
+        return None
     try :
         emb =HuggingFaceEmbeddings (model_name =EMBEDDING_MODEL )
         return FAISS .load_local (PERSIST_FAISS_DIR ,emb ,allow_dangerous_deserialization =True )
     except Exception as e :
         st .error (f"FAISS load error: {e }")
-        return None 
-
-
+        return None
 
 vectorstore =load_vectorstore ()
 decision_node =FundDecisionNode (vectorstore )
-
-
-
-
 
 def retrieve_with_decision (question :str )->Tuple [List [Document ],RoutingDecision ]:
     if not vectorstore :
@@ -297,14 +261,13 @@ def retrieve_with_decision (question :str )->Tuple [List [Document ],RoutingDeci
     if decision .retrieve_all :
         sk ={"k":decision .k_value }
     else :
-        codes =decision .target_codes 
+        codes =decision .target_codes
         fn =(lambda m :m .get ("fund_code")==codes [0 ])if len (codes )==1 else (lambda m :m .get ("fund_code")in codes )
         sk ={"k":decision .k_value ,"filter":fn }
 
     retriever =vectorstore .as_retriever (search_kwargs =sk )
     docs =retriever .invoke (question )
-    return docs ,decision 
-
+    return docs ,decision
 
 def format_docs (docs :List [Document ])->str :
     if not docs :
@@ -326,18 +289,14 @@ def format_docs (docs :List [Document ])->str :
             parts .append (f"... and {len (gdocs )-8 } more")
     return "\n".join (parts )
 
-
-
-
-
-answer_llm =None 
+answer_llm =None
 if is_openrouter_key_configured ():
     answer_llm =ChatOpenAI (
     model =LLM_MODEL ,
     openai_api_key =OPENROUTER_API_KEY ,
     openai_api_base =OPENROUTER_BASE_URL ,
     temperature =0.2 ,
-    max_tokens =800 
+    max_tokens =800
     )
 
 RAG_PROMPT =ChatPromptTemplate .from_template ("""You are a mutual fund analyst specializing in Motilal Oswal funds.
@@ -367,7 +326,7 @@ def build_chain ():
     def retrieve_step (inputs ):
         q =inputs ["question"]
         docs ,dec =retrieve_with_decision (q )
-        st .session_state .last_decision =dec 
+        st .session_state .last_decision =dec
         st .session_state .last_retrieval ={
         "count":len (docs ),
         "funds":sorted (set (d .metadata .get ("fund_code","UNK")for d in docs ))
@@ -375,10 +334,6 @@ def build_chain ():
         return {"context":format_docs (docs ),"question":q }
 
     return RunnablePassthrough ()|RunnableLambda (retrieve_step )|RAG_PROMPT |answer_llm |StrOutputParser ()
-
-
-
-
 
 with st .sidebar :
     st .header ("📊 Status")
@@ -395,17 +350,13 @@ with st .sidebar :
     st .session_state .show_debug =st .checkbox ("🔍 Debug",value =st .session_state .show_debug )
 
     if st .session_state .show_debug and st .session_state .last_decision :
-        d =st .session_state .last_decision 
+        d =st .session_state .last_decision
         st .write (f"**Logic:** {d .explanation }")
         st .write (f"**Codes:** {d .target_codes or 'ALL'}")
         st .write (f"**K:** {d .k_value }")
 
         if st .session_state .last_retrieval :
             st .write (f"**Retrieved:** {st .session_state .last_retrieval ['count']} chunks from funds: {', '.join (st .session_state .last_retrieval ['funds'])}")
-
-
-
-
 
 st .title ("🧠 Motilal Oswal Fund Analyzer")
 st .caption ("Decision Node routing for multi-fund queries")
@@ -433,7 +384,7 @@ if prompt :=st .chat_input ("Ask (e.g., 'Compare YO46 vs YO47')..."):
             st .markdown (resp )
 
             if st .session_state .show_debug and st .session_state .last_retrieval :
-                info =st .session_state .last_retrieval 
+                info =st .session_state .last_retrieval
                 with st .expander ("🔍 Details"):
                     st .write (f"Docs: {info ['count']}")
                     st .write (f"Funds: {', '.join (info ['funds'])or 'None'}")

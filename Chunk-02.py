@@ -1,37 +1,32 @@
-
 """
 Step 2: Load .json from temp_pickles → optional chunking → save new .json
 """
 
-import os 
-import json 
-from typing import List 
-from datetime import datetime 
-from langchain_core .documents import Document 
-from langchain_text_splitters import RecursiveCharacterTextSplitter 
-
+import os
+import json
+from typing import List
+from datetime import datetime
+from langchain_core .documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 INPUT_FOLDER ="temp_pickles"
 OUTPUT_FOLDER ="temp_pickles"
-CHUNK_SIZE =1000 
-CHUNK_OVERLAP =150 
-DO_SPLIT =True 
+CHUNK_SIZE =1000
+CHUNK_OVERLAP =150
+DO_SPLIT =True
 
 os .makedirs (OUTPUT_FOLDER ,exist_ok =True )
-
 
 def _clean_value (value :str )->str :
     text =(value or "").strip ()
     return text if text else "Unknown"
 
-
 def _is_noise_value (value :str )->bool :
     v =(value or "").strip ().lower ()
     if not v :
-        return True 
+        return True
 
     return all (ch .isdigit ()or ch in ".-+%"for ch in v )
-
 
 def _extract_portfolio_fields (doc :Document )->dict :
     """
@@ -71,7 +66,6 @@ def _extract_portfolio_fields (doc :Document )->dict :
     "sector":sector ,
     }
 
-
 def _build_structured_content (doc :Document )->str :
     fund_name =_clean_value (doc .metadata .get ("fund_name",""))
     fund_code =_clean_value (doc .metadata .get ("fund_code",""))
@@ -88,7 +82,6 @@ def _build_structured_content (doc :Document )->str :
     f"Sector: {portfolio_fields ['sector']}"
     )
 
-
 def load_docs_from_json (file_path :str )->List [Document ]:
     if not os .path .exists (file_path ):
         print (f"ERROR: File not found → {file_path }")
@@ -102,7 +95,7 @@ def load_docs_from_json (file_path :str )->List [Document ]:
         for item in data :
             if not isinstance (item ,dict )or "page_content"not in item or "metadata"not in item :
                 print ("Warning: Invalid item in JSON → skipping")
-                continue 
+                continue
             doc =Document (
             page_content =item ["page_content"],
             metadata =item ["metadata"]
@@ -110,17 +103,16 @@ def load_docs_from_json (file_path :str )->List [Document ]:
             docs .append (doc )
 
         print (f"Loaded {len (docs )} documents from {file_path }")
-        return docs 
+        return docs
 
     except Exception as e :
         print (f"ERROR loading JSON: {type (e ).__name__ }: {e }")
         return []
 
-
 def chunk_documents (docs :List [Document ])->List [Document ]:
     if not DO_SPLIT :
         print ("Splitting is OFF → returning original documents")
-        return docs 
+        return docs
 
     splitter =RecursiveCharacterTextSplitter (
     chunk_size =CHUNK_SIZE ,
@@ -158,8 +150,7 @@ def chunk_documents (docs :List [Document ])->List [Document ]:
             chunked_docs .append (new_doc )
 
     print (f"Split into {len (chunked_docs )} chunks (from {len (docs )} originals)")
-    return chunked_docs 
-
+    return chunked_docs
 
 def save_chunked_to_json (chunked_docs :List [Document ],original_filename :str )->str :
     timestamp =datetime .now ().strftime ("%Y%m%d_%H%M")
@@ -174,28 +165,26 @@ def save_chunked_to_json (chunked_docs :List [Document ],original_filename :str 
     serializable_data =[
     {
     "page_content":doc .page_content ,
-    "metadata":doc .metadata 
+    "metadata":doc .metadata
     }
-    for doc in chunked_docs 
+    for doc in chunked_docs
     ]
 
     with open (output_path ,"w",encoding ="utf-8")as f :
         json .dump (serializable_data ,f ,ensure_ascii =False ,indent =2 )
 
-    return output_path 
-
+    return output_path
 
 def main ():
     print ("=== Step 2: Chunk Documents (JSON version) ===")
     print (f"Looking in folder: {INPUT_FOLDER }\n")
-
 
     json_files =[f for f in os .listdir (INPUT_FOLDER )if f .lower ().endswith (".json")]
 
     if not json_files :
         print (f"No .json files found in {INPUT_FOLDER }")
         print ("Run data.py first to create row_docs_*.json files.")
-        return 
+        return
 
     print ("Available .json files:")
     for i ,fname in enumerate (sorted (json_files ),1 ):
@@ -206,13 +195,13 @@ def main ():
 
         if choice .lower ()in ['q','quit','exit']:
             print ("Exiting.")
-            return 
+            return
 
         try :
-            idx =int (choice )-1 
+            idx =int (choice )-1
             if 0 <=idx <len (json_files ):
                 selected_file =json_files [idx ]
-                break 
+                break
             else :
                 print ("Invalid number.")
         except ValueError :
@@ -222,17 +211,15 @@ def main ():
     docs =load_docs_from_json (input_path )
 
     if not docs :
-        return 
+        return
 
     chunked_docs =chunk_documents (docs )
-
 
     output_path =save_chunked_to_json (chunked_docs ,selected_file )
 
     print (f"\nSaved {len (chunked_docs )} items to:")
     print (f"  → {output_path }")
     print ("\nNext step: Update 03_embed_and_update_store.py to load from .json and add to FAISS")
-
 
 if __name__ =="__main__":
     main ()

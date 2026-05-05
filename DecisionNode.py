@@ -1,4 +1,3 @@
-
 """
 Streamlit RAG Chatbot with Intelligent Decision Node for Motilal Oswal Funds
 - Loads FAISS index
@@ -7,27 +6,23 @@ Streamlit RAG Chatbot with Intelligent Decision Node for Motilal Oswal Funds
 - Shows debug info + retrieved fund codes
 """
 
-import os 
-import re 
-import json 
-from pathlib import Path 
-import streamlit as st 
-from typing import List ,Dict ,Optional ,Tuple 
-from dataclasses import dataclass 
+import os
+import re
+import json
+from pathlib import Path
+import streamlit as st
+from typing import List ,Dict ,Optional ,Tuple
+from dataclasses import dataclass
 
-from langchain_huggingface import HuggingFaceEmbeddings 
-from langchain_community .vectorstores import FAISS 
-from langchain_openai import ChatOpenAI 
-from langchain_core .prompts import ChatPromptTemplate 
-from langchain_core .runnables import RunnablePassthrough ,RunnableLambda 
-from langchain_core .output_parsers import StrOutputParser 
-from langchain_core .documents import Document 
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community .vectorstores import FAISS
+from langchain_openai import ChatOpenAI
+from langchain_core .prompts import ChatPromptTemplate
+from langchain_core .runnables import RunnablePassthrough ,RunnableLambda
+from langchain_core .output_parsers import StrOutputParser
+from langchain_core .documents import Document
 
-
-
-
-
-PROJECT_ROOT =Path (__file__ ).resolve ().parent 
+PROJECT_ROOT =Path (__file__ ).resolve ().parent
 PERSIST_DIR =str (PROJECT_ROOT /"db"/"faiss_motilal")
 EMBED_MODEL ="sentence-transformers/all-MiniLM-L6-v2"
 
@@ -40,23 +35,18 @@ layout ="wide",
 initial_sidebar_state ="expanded"
 )
 
-
-
-
-
 def init_session ():
     defaults ={
     "messages":[],
     "show_debug":False ,
     "last_decision":None ,
-    "last_retrieval":None 
+    "last_retrieval":None
     }
     for k ,v in defaults .items ():
         if k not in st .session_state :
-            st .session_state [k ]=v 
+            st .session_state [k ]=v
 
 init_session ()
-
 
 def ensure_openrouter_config ()->Optional [str ]:
     """Return a human-readable config error, or None when config looks usable."""
@@ -69,31 +59,26 @@ def ensure_openrouter_config ()->Optional [str ]:
         return (
         "OpenRouter API key format looks invalid. Expected a key starting with `sk-or-`."
         )
-    return None 
+    return None
 
-
-
-
-
-@dataclass 
+@dataclass
 class RoutingDecision :
     target_codes :List [str ]
-    explanation :str 
-    retrieve_all :bool 
-    k_value :int 
-    is_comparison :bool 
-
+    explanation :str
+    retrieve_all :bool
+    k_value :int
+    is_comparison :bool
 
 class FundDecisionNode :
     def __init__ (self ,vectorstore :Optional [FAISS ]=None ):
-        self .vectorstore =vectorstore 
+        self .vectorstore =vectorstore
         self .code_to_name :Dict [str ,str ]={}
         self .name_to_code :Dict [str ,List [str ]]={}
         self ._build_mappings ()
 
     def _build_mappings (self ):
         if not self .vectorstore :
-            return 
+            return
 
         for doc in self .vectorstore .docstore ._dict .values ():
             code =doc .metadata .get ("fund_code")
@@ -101,11 +86,11 @@ class FundDecisionNode :
             normalized =doc .metadata .get ("fund_name_normalized",name .lower ().strip ())
 
             if not code :
-                continue 
+                continue
             code =code .upper ()
 
             if code not in self .code_to_name :
-                self .code_to_name [code ]=name 
+                self .code_to_name [code ]=name
 
             variations =[
             normalized ,
@@ -117,13 +102,11 @@ class FundDecisionNode :
             name .lower ().replace ("motilal oswal ","").replace (" fund",""),
             ]
 
-
             noise ={"motilal","oswal","fund","direct","growth","scheme","plan","regular"}
             for w in name .split ():
                 wl =w .lower ().strip ("().,-")
                 if len (wl )>3 and wl not in noise :
                     variations .append (wl )
-
 
             nl =normalized .lower ()
             if "flexi"in nl :
@@ -144,18 +127,15 @@ class FundDecisionNode :
         q_lower =question .lower ().strip ()
         detected =[]
 
-
         for m in re .findall (r"\b([A-Z]{2,4}\d{2,4})\b",q_upper ):
             if m in self .code_to_name :
                 detected .append (m )
-
 
         for var ,codes in self .name_to_code .items ():
             if re .search (r'\b'+re .escape (var )+r'\b',q_lower ,re .IGNORECASE ):
                 detected .extend (codes )
 
         detected =list (dict .fromkeys (detected ))
-
 
         comp_kw =["compare","vs","versus","between","difference","better","worse","which is better"]
         multi_kw =["all funds","every fund","across funds","multiple funds","all schemes"]
@@ -172,7 +152,7 @@ class FundDecisionNode :
                 explanation =f"Single fund detected: {code } ({name })",
                 retrieve_all =False ,
                 k_value =100 ,
-                is_comparison =False 
+                is_comparison =False
                 )
             else :
                 return RoutingDecision (
@@ -180,7 +160,7 @@ class FundDecisionNode :
                 explanation =f"Multiple funds: {', '.join (detected )}",
                 retrieve_all =False ,
                 k_value =60 *len (detected ),
-                is_comparison =True 
+                is_comparison =True
                 )
 
         if is_comparison or is_multi :
@@ -189,9 +169,8 @@ class FundDecisionNode :
             explanation ="Comparison / multi-fund query → retrieve ALL",
             retrieve_all =True ,
             k_value =150 ,
-            is_comparison =True 
+            is_comparison =True
             )
-
 
         return self ._llm_decide (question )
 
@@ -228,10 +207,9 @@ Output JSON only:"""
             openai_api_key =OPENROUTER_KEY ,
             openai_api_base =OPENROUTER_URL ,
             temperature =0.1 ,
-            max_tokens =150 
+            max_tokens =150
             )
             response =llm .invoke (prompt ).content .strip ()
-
 
             json_match =re .search (r'\{.*\}',response ,re .DOTALL )
             if json_match :
@@ -246,7 +224,7 @@ Output JSON only:"""
                     explanation =data .get ("explanation","LLM single"),
                     retrieve_all =False ,
                     k_value =100 ,
-                    is_comparison =False 
+                    is_comparison =False
                     )
                 elif decision =="multiple"and valid_codes :
                     return RoutingDecision (
@@ -254,7 +232,7 @@ Output JSON only:"""
                     explanation =data .get ("explanation","LLM multiple"),
                     retrieve_all =False ,
                     k_value =60 *len (valid_codes ),
-                    is_comparison =True 
+                    is_comparison =True
                     )
                 else :
                     return RoutingDecision ([],"LLM fallback → ALL",True ,150 ,False )
@@ -271,30 +249,21 @@ Output JSON only:"""
 
         return RoutingDecision ([],"LLM error → ALL",True ,150 ,False )
 
-
-
-
-
 @st .cache_resource (show_spinner =False )
 def load_faiss ():
     if not os .path .exists (PERSIST_DIR ):
-        return None 
+        return None
     try :
         emb =HuggingFaceEmbeddings (model_name =EMBED_MODEL )
         return FAISS .load_local (
-        PERSIST_DIR ,emb ,allow_dangerous_deserialization =True 
+        PERSIST_DIR ,emb ,allow_dangerous_deserialization =True
         )
     except Exception as e :
         st .error (f"FAISS load failed: {e }")
-        return None 
-
+        return None
 
 vectorstore =load_faiss ()
 decision_node =FundDecisionNode (vectorstore )
-
-
-
-
 
 def retrieve (decision :RoutingDecision ,query :str )->List [Document ]:
     if not vectorstore :
@@ -303,16 +272,15 @@ def retrieve (decision :RoutingDecision ,query :str )->List [Document ]:
     if decision .retrieve_all :
         kwargs ={"k":decision .k_value }
     else :
-        codes =decision .target_codes 
+        codes =decision .target_codes
         if len (codes )==1 :
             filt =lambda m :m .get ("fund_code")==codes [0 ]
         else :
-            filt =lambda m :m .get ("fund_code")in codes 
+            filt =lambda m :m .get ("fund_code")in codes
         kwargs ={"k":decision .k_value ,"filter":filt }
 
     retriever =vectorstore .as_retriever (search_kwargs =kwargs )
     return retriever .invoke (query )
-
 
 def format_docs (docs :List [Document ])->str :
     if not docs :
@@ -333,16 +301,12 @@ def format_docs (docs :List [Document ])->str :
             parts .append (f"{i }. {preview }")
     return "\n".join (parts )
 
-
-
-
-
 llm =ChatOpenAI (
 model =LLM_MODEL ,
 openai_api_key =OPENROUTER_KEY ,
 openai_api_base =OPENROUTER_URL ,
 temperature =0.15 ,
-max_tokens =1800 
+max_tokens =1800
 )
 
 RAG_PROMPT =ChatPromptTemplate .from_template (
@@ -364,13 +328,12 @@ Rules:
 Answer:"""
 )
 
-
 def build_rag_chain ():
     def retrieve_step (inputs ):
         q =inputs ["question"]
         decision =decision_node .decide (q )
 
-        st .session_state .last_decision =decision 
+        st .session_state .last_decision =decision
 
         docs =retrieve (decision ,q )
 
@@ -378,25 +341,21 @@ def build_rag_chain ():
 
         st .session_state .last_retrieval ={
         "count":len (docs ),
-        "funds":funds 
+        "funds":funds
         }
 
         return {
         "context":format_docs (docs ),
-        "question":q 
+        "question":q
         }
 
     return (
     RunnablePassthrough ()
     |RunnableLambda (retrieve_step )
-    |RAG_PROMPT 
-    |llm 
+    |RAG_PROMPT
+    |llm
     |StrOutputParser ()
     )
-
-
-
-
 
 with st .sidebar :
     st .header ("Controls & Status")
@@ -411,10 +370,6 @@ with st .sidebar :
 
     st .markdown ("---")
     st .session_state .show_debug =st .checkbox ("Show debug info",value =False )
-
-
-
-
 
 st .title ("Motilal Oswal Fund Analyzer")
 st .caption ("Smart routing • single-fund / multi-fund / portfolio-wide questions")
@@ -452,11 +407,10 @@ if prompt :=st .chat_input ("Ask about funds, holdings, comparisons..."):
 
         st .markdown (answer )
 
-
         if st .session_state .show_debug :
             with st .expander ("Debug Info",expanded =True ):
                 if st .session_state .last_decision :
-                    d =st .session_state .last_decision 
+                    d =st .session_state .last_decision
                     st .write ("**Decision**")
                     st .write (f"• {d .explanation }")
                     st .write (f"• Codes: {d .target_codes or 'ALL'}")
@@ -464,7 +418,7 @@ if prompt :=st .chat_input ("Ask about funds, holdings, comparisons..."):
                     st .write (f"• Comparison mode: {d .is_comparison }")
 
                 if st .session_state .last_retrieval :
-                    r =st .session_state .last_retrieval 
+                    r =st .session_state .last_retrieval
                     st .write ("**Retrieval**")
                     st .write (f"• {r ['count']} chunks retrieved")
                     st .write (f"• From funds: {', '.join (r ['funds'])or 'none'}")
