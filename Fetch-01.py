@@ -9,12 +9,14 @@ Step 1: Load Motilal Oswal portfolio Excel sheet -> create lean LangChain Docume
 
 import os  
 import pickle  
+from pathlib import Path
 import pandas as pd  # data handling and Excel I/O
 from langchain_core.documents import Document  # LangChain Document type
 
 # ──── CONFIG ────
-EXCEL_FILE =   # path to source Excel
-OUTPUT_FOLDER = "temp_pickles"  # output folder for generated artifacts
+PROJECT_ROOT = Path(__file__).resolve().parent  # project root based on script location
+EXCEL_FILE = PROJECT_ROOT / "data" / "raw" / "db566-scheme-portfolio-details-december-2025.xlsx"  # path to source Excel
+OUTPUT_FOLDER = PROJECT_ROOT / "temp_pickles"  # output folder for generated artifacts
 START_ROW = 3                     # 0-based -> usually row 4 in Excel (headers)  # starting row index
 MAX_ROWS = 150                    # increased slightly for safety  # max rows to read
 PORTFOLIO_DATE = "2025-12-31"  # portfolio effective date
@@ -137,7 +139,6 @@ def load_sheet_to_documents(sheet_name: str) -> list[Document]:  # convert a she
     return documents  # return result list
 
 import json  # JSON persistence for output
-import os  # os re-import (harmless duplicate) for clarity
 
 def main():  # interactive runner
     print("=== Load Motilal Oswal Portfolio to Documents ===")  # header
@@ -155,7 +156,7 @@ def main():  # interactive runner
             continue
 
         # Define output filename with .json extension
-        output_file = os.path.join(OUTPUT_FOLDER, f"{sheet_name}_docs.json")  # target JSON file
+        output_file = OUTPUT_FOLDER / f"{sheet_name}_docs.json"  # target JSON file
 
         # Convert LangChain Documents to plain dicts (JSON-serializable)
         docs_for_json = [

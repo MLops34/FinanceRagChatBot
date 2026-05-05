@@ -15,8 +15,9 @@ from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 
 # ──── CONFIGURATION ────
-INPUT_FOLDER = "temp_pickles"
-PERSIST_FAISS_DIR = r"E:\Work\FinanceRagChatBot\db\faiss_motilal"
+PROJECT_ROOT = Path(__file__).resolve().parent
+INPUT_FOLDER = PROJECT_ROOT / "temp_pickles"
+PERSIST_FAISS_DIR = PROJECT_ROOT / "db" / "faiss_motilal"
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 # Ensure folders exist
@@ -54,23 +55,25 @@ def load_docs_from_json(file_path: str) -> List[Document]:
 
 
 def load_or_create_faiss(embeddings):
-    """Load existing FAISS index or return None if not found"""
+    """Load existing FAISS index and return tuple (vectorstore, is_new_index)."""
     index_path = os.path.join(PERSIST_FAISS_DIR, "index.faiss")
     if os.path.exists(index_path):
         print(f"Loading existing FAISS index from: {PERSIST_FAISS_DIR}")
         try:
-            return FAISS.load_local(
+            vectorstore = FAISS.load_local(
                 PERSIST_FAISS_DIR,
                 embeddings,
                 allow_dangerous_deserialization=True
             )
+            print("FAISS status: Existing index found. New documents will be appended.")
+            return vectorstore, False
         except Exception as e:
             print(f"Failed to load existing FAISS index: {type(e).__name__}: {e}")
             print("Will create a new one.")
     else:
-        print("No existing FAISS index found → will create new one")
+        print("FAISS status: First run (no index found). A new index will be created.")
     
-    return None
+    return None, True
 
 
 def main():
@@ -116,16 +119,18 @@ def main():
         return
 
     # Prepare embeddings
+    if not os.getenv("HF_TOKEN"):
+        print("Note: HF_TOKEN is not set. Hugging Face may show an unauthenticated-request warning; this is expected.")
     embeddings = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
 
     # Load or create FAISS index
-    vectorstore = load_or_create_faiss(embeddings)
+    vectorstore, creating_new_index = load_or_create_faiss(embeddings)
 
     start_time = time.time()
     print(f"Starting to embed and add {len(docs)} documents...")
 
     try:
-        if vectorstore is None:
+        if creating_new_index:
             # Create new index
             vectorstore = FAISS.from_documents(docs, embeddings)
             vectorstore.save_local(PERSIST_FAISS_DIR)

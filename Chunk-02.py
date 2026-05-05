@@ -6,7 +6,6 @@ Step 2: Load .json from temp_pickles → optional chunking → save new .json
 import os
 import json
 from typing import List
-from pathlib import Path
 from datetime import datetime
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -19,6 +18,75 @@ CHUNK_OVERLAP = 150
 DO_SPLIT = True                         # ← set False if you don't want to split
 
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+
+def _clean_value(value: str) -> str:
+    text = (value or "").strip()
+    return text if text else "Unknown"
+
+
+def _is_noise_value(value: str) -> bool:
+    v = (value or "").strip().lower()
+    if not v:
+        return True
+    # Treat pure numeric/percent-like strings as noisy for sector/instrument fields.
+    return all(ch.isdigit() or ch in ".-+%" for ch in v)
+
+
+def _extract_portfolio_fields(doc: Document) -> dict:
+    """
+    Extract row-level portfolio fields from metadata/page_content.
+    Expected row shape:
+    Sr. No. • Name of Instrument • ISIN • Rating / Industry • Quantity •
+    Market value (Rs. In lakhs) • % to Net Assets • Sector / Rating • ...
+    """
+    instrument = _clean_value(doc.metadata.get("instrument", ""))
+    rating_industry = _clean_value(doc.metadata.get("rating_industry", ""))
+    quantity = _clean_value(doc.metadata.get("quantity", ""))
+    market_value = _clean_value(doc.metadata.get("market_value", ""))
+    net_assets_pct = _clean_value(doc.metadata.get("net_assets_pct", ""))
+    sector = _clean_value(doc.metadata.get("sector", ""))
+
+    parts = [p.strip() for p in doc.page_content.split("•")]
+    if len(parts) >= 7:
+        if instrument == "Unknown":
+            instrument = _clean_value(parts[1])
+        if rating_industry == "Unknown":
+            rating_industry = _clean_value(parts[3])
+        if quantity == "Unknown":
+            quantity = _clean_value(parts[4])
+        if market_value == "Unknown":
+            market_value = _clean_value(parts[5])
+        if net_assets_pct == "Unknown":
+            net_assets_pct = _clean_value(parts[6])
+        if sector == "Unknown" and len(parts) >= 8:
+            sector = _clean_value(parts[7])
+
+    return {
+        "name_of_instrument": instrument,
+        "rating_industry": rating_industry,
+        "quantity": quantity,
+        "market_value": market_value,
+        "net_assets_pct": net_assets_pct,
+        "sector": sector,
+    }
+
+
+def _build_structured_content(doc: Document) -> str:
+    fund_name = _clean_value(doc.metadata.get("fund_name", ""))
+    fund_code = _clean_value(doc.metadata.get("fund_code", ""))
+    portfolio_fields = _extract_portfolio_fields(doc)
+
+    return (
+        f"Fund Name: {fund_name}\n"
+        f"Fund Code: {fund_code}\n"
+        f"Name of Instrument: {portfolio_fields['name_of_instrument']}\n"
+        f"Rating/Industry: {portfolio_fields['rating_industry']}\n"
+        f"Quantity: {portfolio_fields['quantity']}\n"
+        f"Market Value: {portfolio_fields['market_value']}\n"
+        f"% Net Assets: {portfolio_fields['net_assets_pct']}\n"
+        f"Sector: {portfolio_fields['sector']}"
+    )
 
 
 def load_docs_from_json(file_path: str) -> List[Document]:
@@ -63,20 +131,24 @@ def chunk_documents(docs: List[Document]) -> List[Document]:
 
     chunked_docs = []
     for doc in docs:
-        original_prefix = f"[Fund: {doc.metadata.get('fund_name', 'Unknown')} | Code: {doc.metadata.get('fund_code', 'UNK')}] "
-        
-        sub_chunks = splitter.split_text(doc.page_content)
+        structured_content = _build_structured_content(doc)
+        sub_chunks = splitter.split_text(structured_content)
+        portfolio_fields = _extract_portfolio_fields(doc)
         
         for i, chunk_text in enumerate(sub_chunks):
-            # Always include prefix on first chunk, and also on continuations
-            content_to_use = chunk_text
-            if i > 0:
-                content_to_use = original_prefix + chunk_text
-            
             new_doc = Document(
-                page_content=content_to_use,
+                page_content=chunk_text,
                 metadata={
                     **doc.metadata,
+                    "fund_name": _clean_value(doc.metadata.get("fund_name", "")),
+                    "fund_code": _clean_value(doc.metadata.get("fund_code", "")),
+                    "instrument": portfolio_fields["name_of_instrument"],
+                    "sector": portfolio_fields["sector"],
+                    "name_of_instrument": portfolio_fields["name_of_instrument"],
+                    "rating_industry": portfolio_fields["rating_industry"],
+                    "quantity": portfolio_fields["quantity"],
+                    "market_value": portfolio_fields["market_value"],
+                    "net_assets_pct": portfolio_fields["net_assets_pct"],
                     "chunk_id": i,
                     "original_chunk_start": i * (CHUNK_SIZE - CHUNK_OVERLAP),
                     "original_row": doc.metadata.get("row_number"),

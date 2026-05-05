@@ -5,6 +5,7 @@ Can be imported into inter-04.py or run standalone for testing.
 """
 
 import os
+from pathlib import Path
 from typing import List, Tuple
 
 import streamlit as st
@@ -15,7 +16,8 @@ from langchain_huggingface import HuggingFaceEmbeddings
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIG (should match your inter-04.py)
 # ─────────────────────────────────────────────────────────────────────────────
-PERSIST_FAISS_DIR = r"E:\Work\FinanceRagChatBot\db\faiss_motilal"
+PROJECT_ROOT = Path(__file__).resolve().parent
+PERSIST_FAISS_DIR = str(PROJECT_ROOT / "db" / "faiss_motilal")
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 

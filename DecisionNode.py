@@ -10,6 +10,7 @@ Streamlit RAG Chatbot with Intelligent Decision Node for Motilal Oswal Funds
 import os
 import re
 import json
+from pathlib import Path
 import streamlit as st
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
@@ -26,14 +27,15 @@ from langchain_core.documents import Document
 # ────────────────────────────────────────────────
 # CONFIGURATION
 # ────────────────────────────────────────────────
-PERSIST_DIR     = r"E:\Work\FinanceRagChatBot\db\faiss_motilal"
+PROJECT_ROOT = Path(__file__).resolve().parent
+PERSIST_DIR = str(PROJECT_ROOT / "db" / "faiss_motilal")
 EMBED_MODEL     = "sentence-transformers/all-MiniLM-L6-v2"
 
 OPENROUTER_KEY  = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY"))
 OPENROUTER_URL  = "https://openrouter.ai/api/v1"
-LLM_MODEL = "arcee-ai/trinity-mini:free"
+LLM_MODEL = "deepseek/deepseek-r1"
 st.set_page_config(
-    page_title="Motilal Oswal Fund Analyzer",
+    page_title="Financial RAG Chatbot",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -54,6 +56,20 @@ def init_session():
             st.session_state[k] = v
 
 init_session()
+
+
+def ensure_openrouter_config() -> Optional[str]:
+    """Return a human-readable config error, or None when config looks usable."""
+    if not OPENROUTER_KEY:
+        return (
+            "Missing OpenRouter API key. Set `OPENROUTER_API_KEY` in Streamlit secrets or "
+            "environment variables."
+        )
+    if not OPENROUTER_KEY.startswith("sk-or-"):
+        return (
+            "OpenRouter API key format looks invalid. Expected a key starting with `sk-or-`."
+        )
+    return None
 
 
 # ────────────────────────────────────────────────
@@ -244,7 +260,14 @@ Output JSON only:"""
                     return RoutingDecision([], "LLM fallback → ALL", True, 150, False)
 
         except Exception as e:
-            st.warning(f"LLM decision failed: {str(e)}")
+            err = str(e)
+            if "401" in err or "User not found" in err:
+                st.warning(
+                    "LLM decision fallback failed due to OpenRouter auth (401). "
+                    "Check OPENROUTER_API_KEY."
+                )
+            else:
+                st.warning(f"LLM decision failed: {err}")
 
         return RoutingDecision([], "LLM error → ALL", True, 150, False)
 
@@ -409,12 +432,23 @@ if prompt := st.chat_input("Ask about funds, holdings, comparisons..."):
         with st.spinner("Analyzing..."):
             if not vectorstore:
                 answer = "Knowledge base not loaded. Please run the embedding step first."
+            elif (cfg_error := ensure_openrouter_config()) is not None:
+                answer = f"Configuration error:\n\n{cfg_error}"
             else:
                 try:
                     chain = build_rag_chain()
                     answer = chain.invoke({"question": prompt})
                 except Exception as e:
-                    answer = f"Error during processing:\n\n{str(e)}"
+                    err = str(e)
+                    if "401" in err or "User not found" in err:
+                        answer = (
+                            "OpenRouter authentication failed (401: User not found).\n\n"
+                            "Fix: set a valid `OPENROUTER_API_KEY` (starts with `sk-or-`) "
+                            "in `.streamlit/secrets.toml` or as an environment variable, "
+                            "then restart Streamlit."
+                        )
+                    else:
+                        answer = f"Error during processing:\n\n{err}"
 
         st.markdown(answer)
 

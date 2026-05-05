@@ -27,13 +27,19 @@ from Retrieval import retrieve_chunks, get_vectorstore
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIGURATION
 # ─────────────────────────────────────────────────────────────────────────────
-PERSIST_FAISS_DIR = r"E:\Work\FinanceRagChatBot\db\faiss_motilal"
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+PERSIST_FAISS_DIR = os.path.join(PROJECT_ROOT, "db", "faiss_motilal")
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", "your-key-here")
+OPENROUTER_API_KEY = st.secrets.get("OPENROUTER_API_KEY", os.getenv("OPENROUTER_API_KEY", "")).strip()
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 LLM_MODEL = "deepseek/deepseek-r1"
 
 st.set_page_config(page_title="Motilal Oswal Fund Analyzer", layout="wide")
+
+
+def is_openrouter_key_configured() -> bool:
+    """Basic guard so we fail fast with a useful setup message."""
+    return bool(OPENROUTER_API_KEY) and OPENROUTER_API_KEY != "your-key-here"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -234,7 +240,11 @@ Nothing else.
                 temperature=0,
                 max_tokens=50
             )
-            result = llm.predict(prompt).strip().upper()
+            llm_response = llm.invoke(prompt)
+            if hasattr(llm_response, "content"):
+                result = (llm_response.content or "").strip().upper()
+            else:
+                result = str(llm_response).strip().upper()
             
             if result == "ALL" or not result:
                 return RoutingDecision([], "LLM: ALL", True, 150, False)
@@ -320,8 +330,15 @@ def format_docs(docs: List[Document]) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # RAG CHAIN
 # ─────────────────────────────────────────────────────────────────────────────
-answer_llm = ChatOpenAI(model=LLM_MODEL, openai_api_key=OPENROUTER_API_KEY,
-                       openai_api_base=OPENROUTER_BASE_URL, temperature=0.2, max_tokens=800)
+answer_llm = None
+if is_openrouter_key_configured():
+    answer_llm = ChatOpenAI(
+        model=LLM_MODEL,
+        openai_api_key=OPENROUTER_API_KEY,
+        openai_api_base=OPENROUTER_BASE_URL,
+        temperature=0.2,
+        max_tokens=800
+    )
 
 RAG_PROMPT = ChatPromptTemplate.from_template("""You are a mutual fund analyst specializing in Motilal Oswal funds.
 
@@ -341,6 +358,12 @@ INSTRUCTIONS:
 ANALYSIS:""")
 
 def build_chain():
+    if not answer_llm:
+        raise ValueError(
+            "OpenRouter API key missing or invalid. Set OPENROUTER_API_KEY in Streamlit secrets "
+            "or environment variable."
+        )
+
     def retrieve_step(inputs):
         q = inputs["question"]
         docs, dec = retrieve_with_decision(q)
